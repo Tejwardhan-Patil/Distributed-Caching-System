@@ -1,0 +1,69 @@
+# Development environment configuration for the distributed caching system
+
+# General settings
+environment: development
+debug_mode: true
+
+# Cache settings
+cache:
+  type: in_memory
+  max_size: 512MB
+  eviction_policy: lru 
+  serialization: json  
+
+# Persistence settings
+persistence:
+  enabled: false 
+  disk_store:
+    path: /tmp/cache_disk_store
+    max_size: 1GB
+
+# Replication settings
+replication:
+  enabled: true
+  strategy: multi_master  
+  conflict_resolution: last_write_wins
+
+# Consistency settings
+consistency:
+  model: eventual  
+  quorum_size: 2   
+
+# Networking settings
+networking:
+  protocol: grpc  
+  rpc:
+    port: 50051  
+  timeout: 10s   
+
+# Monitoring and logging
+monitoring:
+  enabled: true
+  prometheus_exporter:
+    endpoint: /metrics
+    port: 9090
+
+logging:
+  level: debug   
+  output: console
+
+# Security settings
+security:
+  authentication: none  
+  encryption: false     
+
+# Fault tolerance settings
+fault_tolerance:
+  failover: true
+  recovery: false  
+
+# Deployment settings
+deployment:
+  strategy: docker-compose  
+  k8s:
+    enabled: false  
+
+# Test settings
+tests:
+  enabled: true
+  coverage_threshold: 80%  

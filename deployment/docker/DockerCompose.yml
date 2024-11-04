@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  cache:
+    build:
+      context: ./cache
+      dockerfile: Dockerfile
+    image: distributed-cache:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - distributed-network
+    environment:
+      - CACHE_STRATEGY=LRU 
+      - CACHE_MEMORY_LIMIT=512MB
+
+  api:
+    build:
+      context: ./management/cache_api
+      dockerfile: Dockerfile
+    image: cache-api:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - cache
+    networks:
+      - distributed-network
+    environment:
+      - CACHE_HOST=cache
+      - CACHE_PORT=6379
+      - API_AUTH_METHOD=JWT
+      - JWT_SECRET=supersecretkey
+      - CACHE_STRATEGY=LRU
+
+  replication:
+    build:
+      context: ./distributed/replication
+      dockerfile: Dockerfile
+    image: replication-manager:latest
+    depends_on:
+      - cache
+    networks:
+      - distributed-network
+    environment:
+      - REPLICATION_STRATEGY=MasterSlave
+      - REPLICA_NODES=3
+      - CACHE_HOST=cache
+      - CACHE_PORT=6379
+
+  monitoring:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile
+    image: monitoring-system:latest
+    ports:
+      - "9090:9090" 
+    depends_on:
+      - cache
+    networks:
+      - distributed-network
+    volumes:
+      - ./monitoring/PrometheusExporter.py:/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - monitoring
+    networks:
+      - distributed-network
+
+  logging:
+    build:
+      context: ./monitoring/logging
+      dockerfile: Dockerfile
+    image: logging-system:latest
+    depends_on:
+      - cache
+    networks:
+      - distributed-network
+    volumes:
+      - ./monitoring/logging/LogConfig.java:/logging/logging.conf
+
+networks:
+  distributed-network:
+    driver: bridge

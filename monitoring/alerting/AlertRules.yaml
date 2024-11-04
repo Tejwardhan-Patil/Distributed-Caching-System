@@ -1,0 +1,52 @@
+groups:
+  - name: CacheSystemAlerts
+    rules:
+      # Alert for high memory usage in cache nodes
+      - alert: HighMemoryUsage
+        expr: node_memory_Active_bytes / node_memory_MemTotal_bytes * 100 > 80
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High Memory Usage Detected"
+          description: "Memory usage is above 80% for more than 5 minutes. Current value: {{ $value }}%."
+
+      # Alert for low cache hit ratio
+      - alert: LowCacheHitRatio
+        expr: cache_hits_total / (cache_hits_total + cache_misses_total) < 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low Cache Hit Ratio"
+          description: "Cache hit ratio has dropped below 85%. Investigate possible configuration or capacity issues."
+
+      # Alert for cache node down
+      - alert: CacheNodeDown
+        expr: up{job="cache_node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cache Node Down"
+          description: "Cache node is unreachable for more than 2 minutes."
+
+      # Alert for high request latency
+      - alert: HighRequestLatency
+        expr: rate(http_request_duration_seconds_sum{job="cache_api"}[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Request Latency"
+          description: "Request latency is above the threshold for more than 5 minutes. Investigate possible overload or network issues."
+
+      # Alert for high disk I/O on persistent cache
+      - alert: HighDiskIO
+        expr: rate(node_disk_io_time_seconds_total{device=~"sd[a-z]"}[5m]) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High Disk I/O Detected"
+          description: "Disk I/O is above 90% utilization for more than 5 minutes on persistent cache nodes."

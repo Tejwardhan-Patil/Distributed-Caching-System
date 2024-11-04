@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation template for a Distributed Caching System."
+
+Parameters:
+  KeyName:
+    Description: "Name of an existing EC2 KeyPair to enable SSH access."
+    Type: String
+    Default: "MyKeyPair"
+
+  InstanceType:
+    Description: "EC2 instance type."
+    Type: String
+    Default: "t3.medium"
+
+  SSHLocation:
+    Description: "The IP range that can SSH to the EC2 instances."
+    Type: String
+    Default: "0.0.0.0/0"
+
+  BucketName:
+    Description: "S3 bucket name for cache backups."
+    Type: String
+    Default: "my-cache-backups"
+
+Resources:
+  CacheBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: "Enabled"
+
+  CacheInstanceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Enable SSH and HTTP access to the cache instances."
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+
+  CacheLaunchConfiguration:
+    Type: "AWS::AutoScaling::LaunchConfiguration"
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref CacheInstanceSecurityGroup
+      ImageId: ami-12345678
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y docker
+          service docker start
+          docker run -d --name cache-container my-docker-repo/cache:latest
+
+  CacheAutoScalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      VPCZoneIdentifier:
+        - subnet-12345
+        - subnet-67890
+      LaunchConfigurationName: !Ref CacheLaunchConfiguration
+      MinSize: "2"
+      MaxSize: "5"
+      DesiredCapacity: "3"
+      HealthCheckType: "EC2"
+      HealthCheckGracePeriod: 300
+      LoadBalancerNames:
+        - !Ref CacheLoadBalancer
+
+  CacheLoadBalancer:
+    Type: "AWS::ElasticLoadBalancing::LoadBalancer"
+    Properties:
+      AvailabilityZones: !GetAZs ""
+      Listeners:
+        - LoadBalancerPort: "80"
+          InstancePort: "80"
+          Protocol: "HTTP"
+      HealthCheck:
+        Target: "HTTP:80/"
+        HealthyThreshold: "3"
+        UnhealthyThreshold: "5"
+        Interval: "30"
+        Timeout: "5"
+      SecurityGroups:
+        - !Ref CacheInstanceSecurityGroup
+
+  CacheInstanceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "ec2.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "CacheInstancePolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:ListBucket"
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+
+  CacheInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Roles:
+        - !Ref CacheInstanceRole
+
+  CloudWatchAlarmHighCPU:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: "Alarm if CPU utilization exceeds 80% for 5 minutes."
+      MetricName: "CPUUtilization"
+      Namespace: "AWS/EC2"
+      Statistic: "Average"
+      Period: "300"
+      EvaluationPeriods: "1"
+      Threshold: "80"
+      ComparisonOperator: "GreaterThanThreshold"
+      Dimensions:
+        - Name: "AutoScalingGroupName"
+          Value: !Ref CacheAutoScalingGroup
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+
+  CloudWatchAlarmLowCPU:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: "Alarm if CPU utilization is less than 20% for 5 minutes."
+      MetricName: "CPUUtilization"
+      Namespace: "AWS/EC2"
+      Statistic: "Average"
+      Period: "300"
+      EvaluationPeriods: "1"
+      Threshold: "20"
+      ComparisonOperator: "LessThanThreshold"
+      Dimensions:
+        - Name: "AutoScalingGroupName"
+          Value: !Ref CacheAutoScalingGroup
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+
+  ScaleUpPolicy:
+    Type: "AWS::AutoScaling::ScalingPolicy"
+    Properties:
+      AutoScalingGroupName: !Ref CacheAutoScalingGroup
+      AdjustmentType: "ChangeInCapacity"
+      ScalingAdjustment: "1"
+      Cooldown: "300"
+
+  ScaleDownPolicy:
+    Type: "AWS::AutoScaling::ScalingPolicy"
+    Properties:
+      AutoScalingGroupName: !Ref CacheAutoScalingGroup
+      AdjustmentType: "ChangeInCapacity"
+      ScalingAdjustment: "-1"
+      Cooldown: "300"
+
+Outputs:
+  CacheLoadBalancerDNSName:
+    Description: "DNS Name of the load balancer."
+    Value: !GetAtt CacheLoadBalancer.DNSName

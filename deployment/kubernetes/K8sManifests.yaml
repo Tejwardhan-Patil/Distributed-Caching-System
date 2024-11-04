@@ -1,0 +1,282 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: distributed-cache
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cache-config
+  namespace: distributed-cache
+data:
+  cache-config.yaml: |
+    cache:
+      type: in-memory
+      evictionPolicy: LRU
+      maxSize: 1000
+      persistence:
+        disk: enabled
+        path: "/var/cache"
+      replication:
+        strategy: master-slave
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: cache-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/distributed-cache"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cache-pvc
+  namespace: distributed-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-deployment
+  namespace: distributed-cache
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: cache-node
+  template:
+    metadata:
+      labels:
+        app: cache-node
+    spec:
+      containers:
+        - name: cache-container
+          image: myregistry.com/cache-node:latest
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: cache-data
+              mountPath: /var/cache
+            - name: cache-config
+              mountPath: /cache-config
+              readOnly: true
+          env:
+            - name: CACHE_CONFIG
+              value: "/cache-config/cache-config.yaml"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: cache-data
+          persistentVolumeClaim:
+            claimName: cache-pvc
+        - name: cache-config
+          configMap:
+            name: cache-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-service
+  namespace: distributed-cache
+spec:
+  selector:
+    app: cache-node
+  ports:
+    - name: cache-port
+      protocol: TCP
+      port: 6379
+      targetPort: 6379
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+  namespace: distributed-cache
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cache-api
+  template:
+    metadata:
+      labels:
+        app: cache-api
+    spec:
+      containers:
+        - name: api-container
+          image: myregistry.com/cache-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CACHE_SERVICE_HOST
+              value: "cache-service"
+            - name: CACHE_SERVICE_PORT
+              value: "6379"
+            - name: API_PORT
+              value: "8080"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service
+  namespace: distributed-cache
+spec:
+  selector:
+    app: cache-api
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: distributed-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /prometheus
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: distributed-cache
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+    scrape_configs:
+      - job_name: 'cache'
+        static_configs:
+          - targets: ['cache-service:6379']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-deployment
+  namespace: distributed-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "grafana_admin_password"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: distributed-cache
+spec:
+  selector:
+    app: grafana
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cache-ingress
+  namespace: distributed-cache
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  tls:
+    - hosts:
+        - cache.website.com
+      secretName: cache-tls
+  rules:
+    - host: cache.website.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cache-tls
+  namespace: distributed-cache
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-cert>
+  tls.key: <base64-encoded-key>
